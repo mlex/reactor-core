@@ -16,7 +16,9 @@
 
 package reactor.core;
 
+import org.assertj.core.api.Assertions;
 import org.junit.Test;
+import reactor.core.publisher.Flux;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -94,5 +96,41 @@ public class ScannableTest {
 	@Test
 	public void globalDefaultTakesPrecedenceOverCallDefault() {
 		assertThat(scannable.scanOrDefault(CUSTOM_STRING, "bar")).isEqualTo("global");
+	}
+
+	@Test
+	public void namedFluxTest() {
+		Flux<Integer> named1 =
+				Flux.range(1, 10)
+				    .flatMap(i -> Flux.range(100, i))
+				    .namedAs("100s")
+				    .hide();
+
+		Flux<Integer> named2 = named1.filter(i -> i % 3 == 0)
+		                             .namedAs("multiple of 3 100s")
+		                             .hide();
+
+		assertThat(Scannable.from(named1).name()).isEqualTo("100s");
+		assertThat(Scannable.from(named2).name()).isEqualTo("multiple of 3 100s");
+	}
+
+	@Test
+	public void taggedFluxTest() {
+		Flux<Integer> tagged1 =
+				Flux.range(1, 10)
+				    .flatMap(i -> Flux.range(100, i))
+				    .taggedAs("1", "One", "Common")
+				    .hide();
+
+
+		Flux<Integer> tagged2 = tagged1.filter(i -> i % 3 == 0)
+		                               .taggedAs("2", "Two", "Common")
+		                               .hide();
+
+		assertThat(Scannable.from(tagged1).tags())
+				.containsExactlyInAnyOrder("1", "One", "Common");
+
+		assertThat(Scannable.from(tagged2).tags())
+				.containsExactlyInAnyOrder("1", "One", "Common", "2", "Two");
 	}
 }
