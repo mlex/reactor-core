@@ -43,6 +43,8 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 
 	final Scheduler scheduler;
 
+	final Scheduler requestScheduler;
+
 	final boolean delayError;
 
 	final Supplier<? extends Queue<T>> queueSupplier;
@@ -53,6 +55,7 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 
 	FluxPublishOn(Flux<? extends T> source,
 			Scheduler scheduler,
+			Scheduler requestScheduler,
 			boolean delayError,
 			int prefetch,
 			int lowTide,
@@ -62,6 +65,7 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 			throw new IllegalArgumentException("prefetch > 0 required but it was " + prefetch);
 		}
 		this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
+		this.requestScheduler = Objects.requireNonNull(requestScheduler, "requestScheduler");
 		this.delayError = delayError;
 		this.prefetch = prefetch;
 		this.lowTide = lowTide;
@@ -85,12 +89,16 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) {
 		Worker worker = Objects.requireNonNull(scheduler.createWorker(),
 				"The scheduler returned a null worker");
+		Worker requestWorker = Objects.requireNonNull(requestScheduler.createWorker(),
+				"The requestScheduler returned a null worker");
 
 		if (actual instanceof ConditionalSubscriber) {
 			ConditionalSubscriber<? super T> cs = (ConditionalSubscriber<? super T>) actual;
 			source.subscribe(new PublishOnConditionalSubscriber<>(cs,
 					scheduler,
 					worker,
+					requestScheduler,
+					requestWorker,
 					delayError,
 					prefetch,
 					lowTide,
@@ -100,6 +108,8 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 		return new PublishOnSubscriber<>(actual,
 				scheduler,
 				worker,
+				requestScheduler,
+				requestWorker,
 				delayError,
 				prefetch,
 				lowTide,
@@ -113,7 +123,11 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 
 		final Scheduler scheduler;
 
+		final Scheduler requestScheduler;
+
 		final Worker worker;
+
+		final Worker requestWorker;
 
 		final boolean delayError;
 
@@ -157,6 +171,8 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 		PublishOnSubscriber(CoreSubscriber<? super T> actual,
 				Scheduler scheduler,
 				Worker worker,
+				Scheduler requestScheduler,
+				Worker requestWorker,
 				boolean delayError,
 				int prefetch,
 				int lowTide,
@@ -164,6 +180,8 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 			this.actual = actual;
 			this.worker = worker;
 			this.scheduler = scheduler;
+			this.requestScheduler = requestScheduler;
+			this.requestWorker = requestWorker;
 			this.delayError = delayError;
 			this.prefetch = prefetch;
 			this.queueSupplier = queueSupplier;
@@ -195,7 +213,7 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 
 						actual.onSubscribe(this);
 
-						s.request(Operators.unboundedOrPrefetch(prefetch));
+						requestMore(Operators.unboundedOrPrefetch(prefetch));
 
 						return;
 					}
@@ -205,7 +223,7 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 
 				actual.onSubscribe(this);
 
-				s.request(Operators.unboundedOrPrefetch(prefetch));
+				requestMore(Operators.unboundedOrPrefetch(prefetch));
 			}
 		}
 
@@ -286,6 +304,27 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 					// which is guaranteed by the WIP guard here in case non-fused output
 					Operators.onDiscardQueueWithClear(queue, actual.currentContext(), null);
 				}
+			}
+		}
+
+		private void requestMore(long n) {
+			try {
+				this.requestWorker.schedule(() -> s.request(n));
+			} catch (RejectedExecutionException ree) {
+				if (sourceMode == ASYNC) {
+					// delegates discarding to the queue holder to ensure there is no racing on draining from the SpScQueue
+					queue.clear();
+				} else if (outputFused) {
+					// We are the holder of the queue, but we still have to perform discarding under the guarded block
+					// to prevent any racing done by downstream
+					this.clear();
+				}
+				else {
+					// In all other modes we are free to discard queue immediately since there is no racing on pooling
+					Operators.onDiscardQueueWithClear(queue, actual.currentContext(), null);
+				}
+				actual.onError(Operators.onRejectedExecution(ree, this, null, null,
+						actual.currentContext()));
 			}
 		}
 
@@ -443,7 +482,7 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 						if (r != Long.MAX_VALUE) {
 							r = REQUESTED.addAndGet(this, -e);
 						}
-						s.request(e);
+						requestMore(e);
 						e = 0L;
 					}
 				}
@@ -639,7 +678,7 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 				long p = produced + 1;
 				if (p == limit) {
 					produced = 0;
-					s.request(p);
+					requestMore(p);
 				}
 				else {
 					produced = p;
@@ -671,6 +710,10 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 		final Worker worker;
 
 		final Scheduler scheduler;
+
+		final Worker requestWorker;
+
+		final Scheduler requestScheduler;
 
 		final boolean delayError;
 
@@ -719,6 +762,8 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 		PublishOnConditionalSubscriber(ConditionalSubscriber<? super T> actual,
 				Scheduler scheduler,
 				Worker worker,
+				Scheduler requestScheduler,
+				Worker requestWorker,
 				boolean delayError,
 				int prefetch,
 				int lowTide,
@@ -726,6 +771,8 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 			this.actual = actual;
 			this.worker = worker;
 			this.scheduler = scheduler;
+			this.requestWorker = requestWorker;
+			this.requestScheduler = requestScheduler;
 			this.delayError = delayError;
 			this.prefetch = prefetch;
 			this.queueSupplier = queueSupplier;
@@ -757,7 +804,7 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 
 						actual.onSubscribe(this);
 
-						s.request(Operators.unboundedOrPrefetch(prefetch));
+						requestMore(Operators.unboundedOrPrefetch(prefetch));
 
 						return;
 					}
@@ -767,9 +814,10 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 
 				actual.onSubscribe(this);
 
-				s.request(Operators.unboundedOrPrefetch(prefetch));
+				requestMore(Operators.unboundedOrPrefetch(prefetch));
 			}
 		}
+
 
 		@Override
 		public void onNext(T t) {
@@ -845,6 +893,27 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 					// which is guaranteed by the WIP guard here in case non-fused output
 					Operators.onDiscardQueueWithClear(queue, actual.currentContext(), null);
 				}
+			}
+		}
+
+		private void requestMore(long n) {
+			try {
+				worker.schedule(() -> s.request(n));
+			} catch (RejectedExecutionException ree) {
+				if (sourceMode == ASYNC) {
+					// delegates discarding to the queue holder to ensure there is no racing on draining from the SpScQueue
+					queue.clear();
+				} else if (outputFused) {
+					// We are the holder of the queue, but we still have to perform discarding under the guarded block
+					// to prevent any racing done by downstream
+					this.clear();
+				}
+				else {
+					// In all other modes we are free to discard queue immediately since there is no racing on pooling
+					Operators.onDiscardQueueWithClear(queue, actual.currentContext(), null);
+				}
+				actual.onError(Operators.onRejectedExecution(ree, this, null, null,
+						actual.currentContext()));
 			}
 		}
 
@@ -994,7 +1063,7 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 					polled++;
 
 					if (polled == limit) {
-						s.request(polled);
+						requestMore(polled);
 						polled = 0L;
 					}
 				}
@@ -1192,7 +1261,7 @@ final class FluxPublishOn<T> extends InternalFluxOperator<T, T> implements Fusea
 				long p = consumed + 1;
 				if (p == limit) {
 					consumed = 0;
-					s.request(p);
+					requestMore(p);
 				}
 				else {
 					consumed = p;

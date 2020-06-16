@@ -1256,7 +1256,9 @@ public class FluxPublishOnTest extends FluxOperatorTest<String, String> {
     public void scanSubscriber() throws InterruptedException {
         CoreSubscriber<Integer> actual = new LambdaSubscriber<>(null, e -> {}, null, null);
         FluxPublishOn.PublishOnSubscriber<Integer> test = new FluxPublishOn.PublishOnSubscriber<>(actual,
-        		Schedulers.single(), Schedulers.single().createWorker(), true, 123, 123, Queues.unbounded());
+        		Schedulers.single(), Schedulers.single().createWorker(),
+				Schedulers.immediate(), Schedulers.immediate().createWorker(),
+				true, 123, 123, Queues.unbounded());
         Subscription parent = Operators.emptySubscription();
         test.onSubscribe(parent);
 
@@ -1289,8 +1291,10 @@ public class FluxPublishOnTest extends FluxOperatorTest<String, String> {
 		@SuppressWarnings("unchecked")
 		Fuseable.ConditionalSubscriber<Integer> actual = Mockito.mock(MockUtils.TestScannableConditionalSubscriber.class);
         FluxPublishOn.PublishOnConditionalSubscriber<Integer> test =
-        		new FluxPublishOn.PublishOnConditionalSubscriber<>(actual, Schedulers.single(),
-        				Schedulers.single().createWorker(), true, 123, 123, Queues.unbounded());
+        		new FluxPublishOn.PublishOnConditionalSubscriber<>(actual,
+						Schedulers.single(), Schedulers.single().createWorker(),
+						Schedulers.immediate(), Schedulers.immediate().createWorker(),
+						true, 123, 123, Queues.unbounded());
         Subscription parent = Operators.emptySubscription();
         test.onSubscribe(parent);
 

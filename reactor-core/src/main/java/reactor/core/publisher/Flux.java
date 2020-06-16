@@ -5804,7 +5804,7 @@ public abstract class Flux<T> implements CorePublisher<T> {
 	 * @see #limitRequest(long)
 	 */
 	public final Flux<T> limitRate(int highTide, int lowTide) {
-		return onAssembly(this.publishOn(Schedulers.immediate(), true, highTide, lowTide));
+		return onAssembly(this.publishOn(Schedulers.immediate(), Schedulers.immediate(), true, highTide, lowTide));
 	}
 
 	/**
@@ -6884,10 +6884,37 @@ public abstract class Flux<T> implements CorePublisher<T> {
 	 * @return a {@link Flux} producing asynchronously
 	 */
 	public final Flux<T> publishOn(Scheduler scheduler, boolean delayError, int prefetch) {
-		return publishOn(scheduler, delayError, prefetch, prefetch);
+		return publishOn(scheduler, Schedulers.immediate(), delayError, prefetch, prefetch);
 	}
 
-	final Flux<T> publishOn(Scheduler scheduler, boolean delayError, int prefetch, int lowTide) {
+	/**
+	 * Run onNext, onComplete and onError on a supplied {@link Scheduler}
+	 * {@link Worker}.
+	 * <p>
+	 * This operator influences the threading context where the rest of the operators in
+	 * the chain below it will execute, up to a new occurrence of {@code publishOn}.
+	 * <p>
+	 * <img class="marble" src="doc-files/marbles/publishOnForFlux.svg" alt="">
+	 * <p>
+	 * Typically used for fast publisher, slow consumer(s) scenarios.
+	 * <blockquote><pre>
+	 * {@code flux.publishOn(Schedulers.single()).subscribe() }
+	 * </pre></blockquote>
+	 *
+	 * @reactor.discard This operator discards elements it internally queued for backpressure upon cancellation or error triggered by a data signal.
+	 *
+	 * @param scheduler a {@link Scheduler} providing the {@link Worker} where to publish
+	 * @param requestScheduler a {@link Scheduler} that is used for signaling requests to upstream publishers
+	 * @param delayError should the buffer be consumed before forwarding any error
+	 * @param prefetch the asynchronous boundary capacity
+	 *
+	 * @return a {@link Flux} producing asynchronously
+	 */
+	public final Flux<T> publishOn(Scheduler scheduler, Scheduler requestScheduler, boolean delayError, int prefetch) {
+		return publishOn(scheduler, requestScheduler, delayError, prefetch, prefetch);
+	}
+
+	final Flux<T> publishOn(Scheduler scheduler, Scheduler requestScheduler, boolean delayError, int prefetch, int lowTide) {
 		if (this instanceof Callable) {
 			if (this instanceof Fuseable.ScalarCallable) {
 				@SuppressWarnings("unchecked")
@@ -6904,7 +6931,7 @@ public abstract class Flux<T> implements CorePublisher<T> {
 			return onAssembly(new FluxSubscribeOnCallable<>(c, scheduler));
 		}
 
-		return onAssembly(new FluxPublishOn<>(this, scheduler, delayError, prefetch, lowTide, Queues.get(prefetch)));
+		return onAssembly(new FluxPublishOn<>(this, scheduler, requestScheduler, delayError, prefetch, lowTide, Queues.get(prefetch)));
 	}
 
 	/**

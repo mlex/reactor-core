@@ -23,6 +23,7 @@ import reactor.core.Fuseable;
 import reactor.core.Scannable;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Scheduler.Worker;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.annotation.Nullable;
 
 /**
@@ -79,12 +80,16 @@ final class ParallelRunOn<T> extends ParallelFlux<T> implements Scannable{
 			if (conditional) {
 				parents[i] = new FluxPublishOn.PublishOnConditionalSubscriber<>(
 						(Fuseable.ConditionalSubscriber<T>)subscribers[i],
-						scheduler, w, true,
+						scheduler, w,
+						Schedulers.immediate(), Schedulers.immediate().createWorker(),
+						true,
 						prefetch, prefetch, queueSupplier);
 			}
 			else {
 				parents[i] = new FluxPublishOn.PublishOnSubscriber<>(subscribers[i],
-						scheduler, w, true,
+						scheduler,  w,
+						Schedulers.immediate(), Schedulers.immediate().createWorker(),
+						true,
 						prefetch, prefetch, queueSupplier);
 			}
 		}
